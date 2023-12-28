@@ -36,6 +36,7 @@ int LiczbaGraczy = 0;
 bool DoTextures = false;
 int ShowingID = 0;
 bool TheEnd = false;   //bool do ktorego zapiszemy, ze jest koniec gry
+bool CanPlay = true;
 
 int** wyniki = nullptr;
 
@@ -146,12 +147,12 @@ void ShowWyniki()
 {
     if (wyniki[ShowingID][2] < 1 and ShowingID == 0)
     {
-        ImGui::Begin("Lol u ded");
+        ImGui::Begin("You Are Eliminated");
         ImGui::End();
     }
     else if (wyniki[ShowingID][2] < 1 and ShowingID != 0)
     {
-        ImGui::Begin("Lol he's ded");
+        ImGui::Begin("Player Eliminated");
         ImGui::End();
     }
     std::string t;
@@ -212,6 +213,20 @@ void SerwerMess(SOCKET ConnectSocket)
 
                         std::cout << liczba << std::endl;
                         LiczbaGraczy = liczba;
+
+                        std::cout << "Answer mode: " << Answerbuf[pos] << std::endl;
+
+                        if (Answerbuf[pos] == '0')
+                        {
+                            std::cout << "Gracz" << std::endl;
+                            CanPlay = true;
+                        }
+                        else
+                        {
+                            std::cout << "obserwer" << std::endl;
+                            CanPlay = false;
+                        }
+                        pos = pos + 2;
 
                         wyniki = new int* [liczba];
                         for (int i = 0; i < liczba; i++)
@@ -388,7 +403,7 @@ void Game(SOCKET ConnectSocket)  //czêœæ kodu odpowiadaj¹ca za komunikacjê serwe
             if (enter_word == true)  //jesli naklikniemy enter to podajemy slowo do wyslania
             {
                 str = sendbuf;   //trzeba zamieniæ na string, bo string ma kilka fajnych funkcji, które siê tu przydadz¹
-                std::cout << enter_word << std::endl;
+                //std::cout << enter_word << std::endl;
                 enter_word = false;
                 if (str.length() > 35)
                 {
@@ -414,7 +429,7 @@ void Game(SOCKET ConnectSocket)  //czêœæ kodu odpowiadaj¹ca za komunikacjê serwe
         }
         else
         {
-            std::cout << "Lol, nie ¿yjesz XD" << std::endl;
+            std::cout << "Koniec Gry" << std::endl;
         }
 
         //printf("Bytes Sent: %ld\n", SendToSerwer);    //kontrola (tylko do debugowania)
@@ -536,6 +551,7 @@ int main()
     std::thread(Game, ConnectSocket).detach();  //w¹tek osobno dla komunikacji serwer - klient, osobno dla interfejsu
     std::thread(SerwerMess, ConnectSocket).detach();  //w¹ted poœwiêcony dla odbierania komunikatów od serwera, aby nie by³o sytuacji, gdzie jakiœ komunikat nie dotrze, bo w¹tek czeka
     //na funckji, która wysy³a, a ta czeka na gracza, by coœ wpisa³
+    //funkcja, ktora kontroluje czy przypadkiem gracz nie jest afk (timeout)
 
     do   //wieczna pêtla interface
     {
@@ -572,13 +588,21 @@ int main()
         }
         else if (Accept_Game == true and GameStarted == true) //jesli zaakceptujesz to mozesz sobie wysylac slowa
         {
-            ImGui::Begin("Tu wpisuj litery/slowa :)");
-            if (ImGui::InputText("", sendbuf, 35, ImGuiInputTextFlags_AutoSelectAll | ImGuiInputTextFlags_EnterReturnsTrue))
+            if (CanPlay == true)
             {
-                //std::cout << "przeszlo" << std::endl;
-                enter_word = true;
+                ImGui::Begin("Tu wpisuj litery/slowa :)");
+                if (ImGui::InputText("", sendbuf, 35, ImGuiInputTextFlags_AutoSelectAll | ImGuiInputTextFlags_EnterReturnsTrue))
+                {
+                    //std::cout << "przeszlo" << std::endl;
+                    enter_word = true;
+                }
+                ImGui::End();
             }
-            ImGui::End();
+            else
+            {
+                ImGui::Begin("Jestes obserwatorem. Milego ogladania :)");
+                ImGui::End();
+            }
 
             ImGui::Begin("Odgadniete slowo:");
             ImGui::Text(Guessing);

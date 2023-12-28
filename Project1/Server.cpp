@@ -30,13 +30,10 @@ bool IsGameStarted = false;
 
 SOCKET* KLIENCI = new SOCKET[liczba_klientow];  //dynamiczna tablica dla socket klientów
 
-std::binary_semaphore sem{1};
-
-
 #define DEFAULT_BUFLEN 36
 #define DEFAULT_PORT "27015"
 
-void Powiadom(int id, int w)    //funkcja bedzie wysy³a³a do ka¿dego wiadomoœæ o wzorze id ' ' 0/1/2/3
+void Powiadom(int id, int kom)    //funkcja bedzie wysy³a³a do ka¿dego wiadomoœæ o wzorze id ' ' 0/1/2/3
 {
     std::string t = std::to_string(id);
 
@@ -52,11 +49,11 @@ void Powiadom(int id, int w)    //funkcja bedzie wysy³a³a do ka¿dego wiadomoœæ o
     }
     c[position] = ' ';
     position++;
-    c[position] = w;
+    c[position] = kom;
     
     for (int i = 0; i < liczba_klientow; i++)     //przesylanie do klientow
     {
-        send(KLIENCI[i], c, 35, 0);
+        send(KLIENCI[i], c, position+1, 0);
     }
     std::cout << "Wyslano: " << c[0] << " " << int(c[2]) << std::endl;
 }
@@ -136,6 +133,7 @@ void gra(SOCKET ClientSocket, int id)
     char recvbuf[DEFAULT_BUFLEN];
     int recvbuflen = DEFAULT_BUFLEN;
     int GetFromClient;
+    bool CanPlay = true;
 
     do
     {
@@ -150,20 +148,31 @@ void gra(SOCKET ClientSocket, int id)
                 break;
             }
         }
+        else     //jesli sie rozlaczy to jest usuwany z tablicy
+        {
+            int new_table_pos = 0;
+            int** nowa_tablica = new int* [liczba_klientow - 1];
+            for (int i = 0; i < liczba_klientow; ++i) 
+            {
+                if (id != wyniki[i][0])
+                {
+                    nowa_tablica[new_table_pos] = wyniki[i];
+                    new_table_pos++;
+                }
+            }
+            delete[] wyniki;
+            wyniki = nowa_tablica;
+            BreakConnection(ClientSocket);
+            return;
+        }
 
     } while (true);
     
     if (IsGameStarted == 1)
     {
         //usuwanie delikwenta z listy
-        int** nowa_tablica = new int* [liczba_klientow - 1];
-        for (int i = 0; i < liczba_klientow - 1; ++i) {
-            nowa_tablica[i] = wyniki[i];
-        }
-        delete[] wyniki;
-        wyniki = nowa_tablica;
-        BreakConnection(ClientSocket);
-        return;
+        CanPlay = false;
+        std::cout << "obserwer" << std::endl;
     }
 
     do
@@ -181,7 +190,7 @@ void gra(SOCKET ClientSocket, int id)
             int CheckClient = send(ClientSocket, check, 1, 0);
             if (CheckClient < 0)
             {
-                //usun delikwenta   WYCIEK PAMIECI???
+                //usun uzytkownika
                 for (int x = 0; x < liczba_klientow; x++)
                 {
                     if (wyniki[x][0] == id)
@@ -225,32 +234,35 @@ void gra(SOCKET ClientSocket, int id)
     std::cout << check[0] << std::endl;
     int CheckClient = send(ClientSocket, check, 1, 0);    //wyslanie powiadomienia o rozpoczaniu gry
     
-    Sleep(1000);//przeslanie tabeli (ile graczy + jakie indeksy). Tabela zawsze wyglada nastepujaco: 1 liczba - ilosc graczy; 2 liczba - twoj indeks (tego gracza do ktorego przesylamy); pozostale liczby - pozostale indeksy. Wszystko to jest oddzielone ' '.
-    char info[35];
+    Sleep(1000);//przeslanie tabeli (ile graczy + jakie indeksy). Tabela zawsze wyglada nastepujaco: 1 liczba - ilosc graczy; 2 liczba informacja, czy jestes graczem (0) czy obserwatorem (1); 3  twoj indeks; pozostale liczby - pozostale indeksy. Wszystko to jest oddzielone ' '.
+    std::string info;
     std::string help1;
     help1.clear();
     help1 = std::to_string(IleGraczy);
-    int control_info = 0;    //aby monitorowaæ na jakiej pozycji jestem
     for (int i = 0; i < help1.length(); i++)
     {   
-        info[control_info] = NULL;
-        info[control_info] = help1[i];
-        control_info++;
+        info.push_back(help1[i]);
     }
-    info[control_info] = ' ';
-    control_info++;
+    info.push_back(' ');
     
+    if (CanPlay == true)
+    {
+        info.push_back('0');
+    }
+    else
+    {
+        info.push_back('1');
+    }
+    info.push_back(' ');
+
     std::string help2;
     help2.clear();
     help2 = std::to_string(id);
     for (int i = 0; i < help2.length(); i++)
     {
-        info[control_info] = NULL;
-        info[control_info] = help2[i];
-        control_info++;
+        info.push_back(help2[i]);
     }
-    info[control_info] = ' ';
-    control_info++;
+    info.push_back(' ');
 
     for (int i = 0; i < IleGraczy; i++)
     {
@@ -261,16 +273,15 @@ void gra(SOCKET ClientSocket, int id)
             help3 = std::to_string(wyniki[i][0]);
             for (int a = 0; a < help3.length(); a++)
             {
-                info[control_info] = NULL;
-                info[control_info] = help3[a];
-                control_info++;
+                info.push_back(help3[a]);
             }
-            info[control_info] = ' ';
-            control_info++;
+            info.push_back(' ');
         }
     }
 
-    int Gracze = send(ClientSocket, info, sizeof(info), 0);   //przesylanie do gracza
+    std::cout << "info "<< info.c_str() << std::endl;
+
+    int Gracze = send(ClientSocket, info.c_str(), sizeof(info), 0);   //przesylanie do gracza
     if (Gracze == SOCKET_ERROR)
     {
         std::cout << "Problem Gracze" << std::endl;
@@ -315,8 +326,7 @@ void gra(SOCKET ClientSocket, int id)
         }
 
         bool traf = 0;
-
-        if (GetFromClient > 1) {    //sprawdzamy ile jest znakow
+        if (GetFromClient > 1 and CanPlay == true) {    //sprawdzamy ile jest znakow (jesli gracz nie jest obserwatorem)
             //wiecej niz jeden znak - sprawdzamy czy klient zgadl haslo        UWAGA NIE ROB wyniki[id][cos tam] tylko if wyniki[xxx][0] == id to wtedy wyniki[xxx][cos tam]
             if (recvbuf == slowo)
             {
@@ -372,7 +382,7 @@ void gra(SOCKET ClientSocket, int id)
                 }
             }
         }
-        else if (GetFromClient == 1)
+        else if (GetFromClient == 1 and CanPlay == true and recvbuf[0] != '-')
         {
             //jeden znak - sprawdzamy czy klient zgadl litere
             for (int i = 0; i < slowo.length(); i++)
@@ -425,10 +435,8 @@ void gra(SOCKET ClientSocket, int id)
             //std::cout << visualization_slowo << std::endl;
             //std::cout << slowo << std::endl;
         }
-        else if (GetFromClient == 0) {
-            //0 znakow - nothing todo here
-        }
-        else {
+        else 
+        {
             //ujemna wartoœæ - klient jest roz³¹czany
             DisqualificationWyniki(id);
             Powiadom(id, 3);
@@ -457,7 +465,15 @@ void gra(SOCKET ClientSocket, int id)
         if (s <= 1)
         {
             std::cout << "Koniec gry" << std::endl;
-            break;
+
+            // shutdown the connection since we're done
+
+            int iResult = shutdown(ClientSocket, SD_SEND);
+            if (iResult == SOCKET_ERROR) {
+                printf("shutdown failed with error: %d\n", WSAGetLastError());
+                closesocket(ClientSocket);
+                WSACleanup();
+            }
         }
     }
     while (true);
@@ -468,9 +484,9 @@ int __cdecl main(void)
     srand(time(0)); // start generate random values (we will need it to GenNewWord function)
     GenNewWord();
 
-    setlocale(LC_CTYPE, "Polish"); // polskie znaki, których nie mozna u¿ywaæ LOL
+    setlocale(LC_CTYPE, "Polish"); // polskie znaki
 
-    //inicjalizacja serwera goes brrrrr
+    //inicjalizacja serwera
     WSADATA wsaData;
     int iResult;
 
@@ -544,8 +560,6 @@ int __cdecl main(void)
             return 1;
         }
 
-        sem.acquire();
-
         KLIENCI[liczba_klientow] = ClientSocket;
 
         BiggerWyniki();
@@ -555,7 +569,7 @@ int __cdecl main(void)
         for (int i = 0; i <= liczba_klientow; i++)      //pierwsza petla przelatuje przez wszystkie mozliwe id (0, 1, 2 ... liczba_klientow), a druga sprawdza, czy daje id juz bylo
         {                                               //jesli tego id nie bylo to zostaje ono nadane temu nowemu klientowi
             isUsed = false;
-            for (int a = 0; a <= liczba_klientow; a++)
+            for (int a = 0; a < liczba_klientow; a++)
             {
                 if (wyniki[a][0] == i)
                 {
@@ -576,8 +590,6 @@ int __cdecl main(void)
         liczba_klientow++;
 
         std::cout << "Kolejny gracz do³¹czy³ do gry!" << std::endl;
-
-        sem.release();
 
     } while (true);
 

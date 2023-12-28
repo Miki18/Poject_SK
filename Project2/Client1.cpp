@@ -36,6 +36,8 @@ int LiczbaGraczy = 0;
 bool DoTextures = false;
 int ShowingID = 0;
 bool TheEnd = false;   //bool do ktorego zapiszemy, ze jest koniec gry
+bool CanPlay = true;
+int time_limit = 30;  // do kontrolowania, czy gracz nie jest afk
 
 int** wyniki = nullptr;
 
@@ -123,7 +125,7 @@ void ustawienieTextury()
     case 0:
         texture = loadTexture("10.bmp");
         break;
-    
+
     case -1:
         texture = loadTexture("disconnected.bmp");
     }
@@ -146,12 +148,12 @@ void ShowWyniki()
 {
     if (wyniki[ShowingID][2] < 1 and ShowingID == 0)
     {
-        ImGui::Begin("Lol u ded");
+        ImGui::Begin("You Are Eliminated");
         ImGui::End();
     }
     else if (wyniki[ShowingID][2] < 1 and ShowingID != 0)
     {
-        ImGui::Begin("Lol he's ded");
+        ImGui::Begin("Player Eliminated");
         ImGui::End();
     }
     std::string t;
@@ -175,6 +177,31 @@ void ShowWyniki()
     t = std::to_string(wyniki[ShowingID][2]);
     ImGui::Text("%s", t.c_str());
     ImGui::End();
+}
+
+void timeout(SOCKET ConnectSocket)
+{
+    while (time_limit >= 0) {
+        std::cout << "Czas pozosta³y: " << time_limit << std::endl;
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        if (CanPlay == true and GameStarted == true)    //liczymy dopiero po tym jak gra sie rozpocznie i jesli uzytkownik jest graczem (nie dotyczy obserwatorow)
+        {
+            time_limit--;
+            //std::cout << "time_limit " << time_limit << std::endl;
+        }
+    }
+    
+    sendbuf[0] = '-';
+
+    int SendToSerwer = send(ConnectSocket, sendbuf, 1, 0);
+    if (SendToSerwer == SOCKET_ERROR)
+    {
+        printf("send accept failed: %d\n", WSAGetLastError());
+        closesocket(ConnectSocket);
+        WSACleanup();
+        exit(1);
+    }
+    closesocket(ConnectSocket);
 }
 
 void SerwerMess(SOCKET ConnectSocket)
@@ -212,6 +239,20 @@ void SerwerMess(SOCKET ConnectSocket)
 
                         std::cout << liczba << std::endl;
                         LiczbaGraczy = liczba;
+
+                        std::cout << "Answer mode: " << Answerbuf[pos] << std::endl;
+
+                        if (Answerbuf[pos] == '0')
+                        {
+                            std::cout << "Gracz" << std::endl;
+                            CanPlay = true;
+                        }
+                        else
+                        {
+                            std::cout << "obserwer" << std::endl;
+                            CanPlay = false;
+                        }
+                        pos = pos + 2;
 
                         wyniki = new int* [liczba];
                         for (int i = 0; i < liczba; i++)
@@ -388,7 +429,7 @@ void Game(SOCKET ConnectSocket)  //czêœæ kodu odpowiadaj¹ca za komunikacjê serwe
             if (enter_word == true)  //jesli naklikniemy enter to podajemy slowo do wyslania
             {
                 str = sendbuf;   //trzeba zamieniæ na string, bo string ma kilka fajnych funkcji, które siê tu przydadz¹
-                std::cout << enter_word << std::endl;
+                //std::cout << enter_word << std::endl;
                 enter_word = false;
                 if (str.length() > 35)
                 {
@@ -400,6 +441,8 @@ void Game(SOCKET ConnectSocket)  //czêœæ kodu odpowiadaj¹ca za komunikacjê serwe
                 }
             }
         } while (true);
+
+        time_limit = 30;    //gracz wpisal slowo i klina³ enter, co spowoduje wys³anie s³owa/litery, a wiêc mo¿na zresetowaæ czas
 
         if (wyniki[0][2] > 0)
         {
@@ -414,7 +457,7 @@ void Game(SOCKET ConnectSocket)  //czêœæ kodu odpowiadaj¹ca za komunikacjê serwe
         }
         else
         {
-            std::cout << "Lol, nie ¿yjesz XD" << std::endl;
+            std::cout << "Koniec Gry" << std::endl;
         }
 
         //printf("Bytes Sent: %ld\n", SendToSerwer);    //kontrola (tylko do debugowania)
@@ -425,7 +468,7 @@ void Game(SOCKET ConnectSocket)  //czêœæ kodu odpowiadaj¹ca za komunikacjê serwe
             if (wyniki[i][2] > 0)
             {
                 gracze_zywi++;
-                
+
                 if (gracze_zywi > 2)
                 {
                     break;
@@ -536,6 +579,7 @@ int main()
     std::thread(Game, ConnectSocket).detach();  //w¹tek osobno dla komunikacji serwer - klient, osobno dla interfejsu
     std::thread(SerwerMess, ConnectSocket).detach();  //w¹ted poœwiêcony dla odbierania komunikatów od serwera, aby nie by³o sytuacji, gdzie jakiœ komunikat nie dotrze, bo w¹tek czeka
     //na funckji, która wysy³a, a ta czeka na gracza, by coœ wpisa³
+    std::thread(timeout, ConnectSocket).detach();//funkcja, ktora kontroluje czy przypadkiem gracz nie jest afk (timeout). Jest to w osobnym w¹tku, poniewa¿ timeout dzia³a niezale¿nie od pozosta³ych dwóch w¹tków
 
     do   //wieczna pêtla interface
     {
@@ -572,13 +616,27 @@ int main()
         }
         else if (Accept_Game == true and GameStarted == true) //jesli zaakceptujesz to mozesz sobie wysylac slowa
         {
-            ImGui::Begin("Tu wpisuj litery/slowa :)");
-            if (ImGui::InputText("", sendbuf, 35, ImGuiInputTextFlags_AutoSelectAll | ImGuiInputTextFlags_EnterReturnsTrue))
+            if (CanPlay == true)
             {
-                //std::cout << "przeszlo" << std::endl;
-                enter_word = true;
+                ImGui::Begin("Tu wpisuj litery/slowa :)");
+                if (ImGui::InputText("", sendbuf, 35, ImGuiInputTextFlags_AutoSelectAll | ImGuiInputTextFlags_EnterReturnsTrue))
+                {
+                    //std::cout << "przeszlo" << std::endl;
+                    enter_word = true;
+                }
+                ImGui::End();
             }
-            ImGui::End();
+            else
+            {
+                ImGui::Begin("Jestes obserwatorem. Milego ogladania :)");
+                ImGui::End();
+            }
+
+            if (time_limit < 10)
+            {
+                ImGui::Begin("Przeslij litere lub slowo, inaczej zostaniejsz rozlaczony");
+                ImGui::End();
+            }
 
             ImGui::Begin("Odgadniete slowo:");
             ImGui::Text(Guessing);

@@ -14,6 +14,8 @@
 #include <cctype>
 #include <vector>
 #include <semaphore>
+#include <mutex>
+#include <condition_variable>
 
 // Need to link with Ws2_32.lib
 #pragma comment (lib, "Ws2_32.lib")
@@ -32,6 +34,9 @@ SOCKET* KLIENCI = new SOCKET[liczba_klientow];  //dynamiczna tablica dla socket 
 
 #define DEFAULT_BUFLEN 36
 #define DEFAULT_PORT "27015"
+
+std::mutex graczeMTX;
+std::condition_variable graczeSEM;
 
 void Powiadom(int id, int kom)    //funkcja bedzie wysy³a³a do ka¿dego wiadomoœæ o wzorze id ' ' 0/1/2/3
 {
@@ -177,16 +182,14 @@ void gra(SOCKET ClientSocket, int id)
 
     do
     {
-        do
-        {
-            //wait for others
-        } while (liczba_klientow < 2);
+        std::unique_lock<std::mutex> graczelck(graczeMTX);
+        graczeSEM.wait(graczelck, [] {return liczba_klientow >= 2; });
 
         for (int i = 0; i < 10; i++)   //czekamy okreslona ilosc czasu chyba, ze liczba klientow spadnie do 1 lub osiagnie max CHANGE TO 60
         {
-            Sleep(1000);
+            Sleep(1000);    //Co sekundê sprawdzamy, czy ktoœ siê nie roz³¹czy³
             char check[1];
-            check[0] = '0';
+            check[0] = '0';       //Wysy³amy 0; jeœli nie dojdzie (CheckClient zwróci wartoœæ <0, czyli error, wtedy wiadomo, ¿e ktoœ siê roz³¹czy³ i trzeba zmodyfikowaæ tabele, zamkn¹æ gniazdo etc)
             int CheckClient = send(ClientSocket, check, 1, 0);
             if (CheckClient < 0)
             {
@@ -234,7 +237,7 @@ void gra(SOCKET ClientSocket, int id)
     std::cout << check[0] << std::endl;
     int CheckClient = send(ClientSocket, check, 1, 0);    //wyslanie powiadomienia o rozpoczaniu gry
     
-    Sleep(1000);//przeslanie tabeli (ile graczy + jakie indeksy). Tabela zawsze wyglada nastepujaco: 1 liczba - ilosc graczy; 2 liczba informacja, czy jestes graczem (0) czy obserwatorem (1); 3  twoj indeks; pozostale liczby - pozostale indeksy. Wszystko to jest oddzielone ' '.
+    //przeslanie tabeli (ile graczy + jakie indeksy). Tabela zawsze wyglada nastepujaco: 1 liczba - ilosc graczy; 2 liczba informacja, czy jestes graczem (0) czy obserwatorem (1); 3  twoj indeks; pozostale liczby - pozostale indeksy. Wszystko to jest oddzielone ' '.
     std::string info;
     std::string help1;
     help1.clear();

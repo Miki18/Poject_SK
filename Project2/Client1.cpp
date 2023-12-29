@@ -1,4 +1,4 @@
-#define WIN32_LEAN_AND_MEAN
+ï»¿#define WIN32_LEAN_AND_MEAN
 
 #include <math.h>
 #include <GL/glew.h>
@@ -17,6 +17,8 @@
 #include "imgui_impl_opengl3.h"
 #include <vector>
 #include <fstream>
+#include <mutex>
+#include <condition_variable>
 
 // Need to link with Ws2_32.lib, Mswsock.lib, and Advapi32.lib
 #pragma comment (lib, "Ws2_32.lib")
@@ -26,22 +28,53 @@
 #define DEFAULT_BUFLEN 512
 #define DEFAULT_PORT "27015"
 
-bool Accept_Game = false;  //zmienna s³u¿¹ca tylko dod akceptacji gry
-char sendbuf[35];  //konstantynopolitañczykowianeczka jest najd³u¿szym wyrazam i ma 32 litery, ale dla pewnoœci (i ³adnego wyl¹du) dam char [35]
-bool enter_word = false; //zmienna pozwalaj¹ca wprowadzic slowo do wyslania
+bool Accept_Game = false;  //zmienna sÅ‚uÅ¼Ä…ca tylko dod akceptacji gry
+char sendbuf[35];  //konstantynopolitaÅ„czykowianeczka jest najdÅ‚uÅ¼szym wyrazam i ma 32 litery, ale dla pewnoÅ›ci (i Å‚adnego wylÄ…du) dam char [35]
+bool enter_word = false; //zmienna pozwalajÄ…ca wprowadzic slowo do wyslania
 char Answerbuf[35];  //zmienna do odbierania sygnalu z serwera
 char Guessing[35];   //zgadywana slowo
 bool GameStarted = false;
 int LiczbaGraczy = 0;
-bool DoTextures = false;
 int ShowingID = 0;
 bool TheEnd = false;   //bool do ktorego zapiszemy, ze jest koniec gry
 bool CanPlay = true;
 int time_limit = 30;  // do kontrolowania, czy gracz nie jest afk
+bool CzyMaszWyniki = false;
+
+std::mutex mtx;
+std::mutex gamemtx;
+std::condition_variable acceptSEM;
+std::condition_variable waitSEM;
+std::condition_variable wait2SEM;
 
 int** wyniki = nullptr;
 
 GLuint texture;
+
+void timeout(SOCKET ConnectSocket)
+{
+    while (time_limit >= 0) {
+        //std::cout << "Czas pozostaÅ‚y: " << time_limit << std::endl;
+        Sleep(1000);    //co sekundÄ™ liczymy czas
+        if (CanPlay == true and GameStarted == true)    //liczymy dopiero po tym jak gra sie rozpocznie i jesli uzytkownik jest graczem (nie dotyczy obserwatorow)
+        {
+            time_limit--;
+            //std::cout << "time_limit " << time_limit << std::endl;
+        }
+    }
+
+    sendbuf[0] = '-';
+
+    int SendToSerwer = send(ConnectSocket, sendbuf, 1, 0);
+    if (SendToSerwer == SOCKET_ERROR)
+    {
+        printf("send accept failed: %d\n", WSAGetLastError());
+        closesocket(ConnectSocket);
+        WSACleanup();
+        exit(1);
+    }
+    closesocket(ConnectSocket);
+}
 
 GLuint loadTexture(const char* filename) {
     glGenTextures(1, &texture);
@@ -56,11 +89,11 @@ GLuint loadTexture(const char* filename) {
     // Wczytaj obraz
     std::ifstream file(filename, std::ios::binary);
     if (!file) {
-        std::cerr << "Nie mo¿na otworzyæ pliku: " << filename << std::endl;
+        std::cerr << "Nie moÅ¼na otworzyÄ‡ pliku: " << filename << std::endl;
         return 0;
     }
 
-    // Wczytaj nag³ówek BMP
+    // Wczytaj nagÅ‚Ã³wek BMP
     char header[54];
     file.read(header, 54);
     int width = *(int*)&header[18];
@@ -71,7 +104,7 @@ GLuint loadTexture(const char* filename) {
     std::vector<char> pixels(size);
     file.read(pixels.data(), size);
 
-    // Utwórz teksturê
+    // UtwÃ³rz teksturÄ™
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_BGR, GL_UNSIGNED_BYTE, pixels.data());
 
     return texture;
@@ -80,7 +113,7 @@ GLuint loadTexture(const char* filename) {
 void ustawienieTextury()
 {
     GLuint texture;
-    switch (wyniki[ShowingID][2]) //wczytaj texturê
+    switch (wyniki[ShowingID][2]) //wczytaj texturÄ™
     {
     case 10:
         texture = loadTexture("0.bmp");
@@ -179,34 +212,8 @@ void ShowWyniki()
     ImGui::End();
 }
 
-void timeout(SOCKET ConnectSocket)
-{
-    while (time_limit >= 0) {
-        std::cout << "Czas pozosta³y: " << time_limit << std::endl;
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-        if (CanPlay == true and GameStarted == true)    //liczymy dopiero po tym jak gra sie rozpocznie i jesli uzytkownik jest graczem (nie dotyczy obserwatorow)
-        {
-            time_limit--;
-            //std::cout << "time_limit " << time_limit << std::endl;
-        }
-    }
-    
-    sendbuf[0] = '-';
-
-    int SendToSerwer = send(ConnectSocket, sendbuf, 1, 0);
-    if (SendToSerwer == SOCKET_ERROR)
-    {
-        printf("send accept failed: %d\n", WSAGetLastError());
-        closesocket(ConnectSocket);
-        WSACleanup();
-        exit(1);
-    }
-    closesocket(ConnectSocket);
-}
-
 void SerwerMess(SOCKET ConnectSocket)
 {
-    bool CzyMaszWyniki = false;
     do
     {
         int GetFromSerwer = recv(ConnectSocket, Answerbuf, 35, 0);  //odczytywanie tabeli
@@ -215,14 +222,14 @@ void SerwerMess(SOCKET ConnectSocket)
             {
                 if (Answerbuf[0] >= char(48) and Answerbuf[0] <= char(57))
                 {
-                    if (CzyMaszWyniki == false)   //trzeba przerobiæ t¹ wiadomoœæ, któr¹ otrzymaliœmy na tabelê (dzieje siê to tylko na pocz¹tku gry)
-                    {                       //algorytm najpierw bada jaka d³uga jest pierwsza cyfra, a potem zamienia j¹ na inta (liczba graczy). Nastepnie robi to tyle razy ile jest graczy, aby odczytaæ ich indeksy, przy czym pierwszy indeks przypisuje sobie
+                    if (CzyMaszWyniki == false)   //trzeba przerobiÄ‡ tÄ… wiadomoÅ›Ä‡, ktÃ³rÄ… otrzymaliÅ›my na tabelÄ™ (dzieje siÄ™ to tylko na poczÄ…tku gry)
+                    {                       //algorytm najpierw bada jaka dÅ‚uga jest pierwsza cyfra, a potem zamienia jÄ… na inta (liczba graczy). Nastepnie robi to tyle razy ile jest graczy, aby odczytaÄ‡ ich indeksy, przy czym pierwszy indeks przypisuje sobie
                         int liczba = 0;
                         int pos = 0;
                         int dl_liczby = 0;
                         wyniki[int(Answerbuf[0])][3];   //stworzenie wynikow
                         //std::cout << "Answerbuf1: " << Answerbuf[0] << std::endl;  //ile graczy
-                        while (Answerbuf[dl_liczby] >= char(48) and Answerbuf[dl_liczby] <= char(57));  //jaka dluga jest pierwsza liczba (odczytujemy ci¹g 0 - 9 do momentu napotkania ' ')
+                        while (Answerbuf[dl_liczby] >= char(48) and Answerbuf[dl_liczby] <= char(57));  //jaka dluga jest pierwsza liczba (odczytujemy ciÄ…g 0 - 9 do momentu napotkania ' ')
                         {
                             dl_liczby++;
                         }
@@ -260,11 +267,11 @@ void SerwerMess(SOCKET ConnectSocket)
                             wyniki[i] = new int[3];
                         }
 
-                        for (int i = 0; i < liczba; i++)    //odcztytujemy wszystkie pozosta³e
+                        for (int i = 0; i < liczba; i++)    //odcztytujemy wszystkie pozostaÅ‚e
                         {
                             int cyfra = 0;
                             dl_liczby = 0;
-                            while (Answerbuf[pos + dl_liczby] >= char(48) and Answerbuf[pos + dl_liczby] <= char(57))  //odczytujemy indeksy (pierwszy jest nasz w³asny)
+                            while (Answerbuf[pos + dl_liczby] >= char(48) and Answerbuf[pos + dl_liczby] <= char(57))  //odczytujemy indeksy (pierwszy jest nasz wÅ‚asny)
                             {
                                 dl_liczby++;
                             }
@@ -283,13 +290,6 @@ void SerwerMess(SOCKET ConnectSocket)
                             wyniki[i][2] = 10;   //hp
                         }
                         CzyMaszWyniki = true;
-
-                        std::cout << "SPRAWDZENIE" << std::endl;
-
-                        for (int i = 0; i < LiczbaGraczy; i++)   //wypisz (kontrola)
-                        {
-                            std::cout << wyniki[i][0] << " " << wyniki[i][1] << " " << wyniki[i][2] << std::endl;
-                        }
                     }
                     else
                     {
@@ -301,7 +301,7 @@ void SerwerMess(SOCKET ConnectSocket)
 
                         int command;
 
-                        while (Answerbuf[lenght] >= char(48) and Answerbuf[lenght] <= char(57))  //odczytujemy indeksy (pierwszy jest nasz w³asny)
+                        while (Answerbuf[lenght] >= char(48) and Answerbuf[lenght] <= char(57))  //odczytujemy indeksy (pierwszy jest nasz wÅ‚asny)
                         {
                             lenght++;
                         }
@@ -367,7 +367,9 @@ void SerwerMess(SOCKET ConnectSocket)
             }
             else    //w trakcie oczekiwania na gre
             {
-                Sleep(200);
+                waitSEM.notify_one();
+                std::unique_lock<std::mutex> gamelck(gamemtx);
+                wait2SEM.wait(gamelck);
                 for (int i = 0; i < 35; i++)
                 {
                     Answerbuf[i] = NULL;
@@ -377,49 +379,31 @@ void SerwerMess(SOCKET ConnectSocket)
     } while (true);
 }
 
-void Game(SOCKET ConnectSocket)  //czêœæ kodu odpowiadaj¹ca za komunikacjê serwer - klient
+void Game(SOCKET ConnectSocket)  //czÄ™Å›Ä‡ kodu odpowiadajÄ…ca za komunikacjÄ™ serwer - klient
 {
     int myID;
     int SendToSerwer;
     std::string str;  //zmienne
 
-    Accept_Game = false;  //trzeba, bo inaczej siê psuje
+    Accept_Game = false;  //trzeba, bo inaczej siÄ™ psuje
 
-    do
+    std::unique_lock<std::mutex> lck(mtx);
+    acceptSEM.wait(lck, [] {return Accept_Game == true; });     //uspij watek do momentu az Accept game nie bedzie true
+
+    sendbuf[0] = 'A';
+    //wyslij wiadomosc o akceptacji gry i break;
+    SendToSerwer = send(ConnectSocket, sendbuf, 1, 0);
+    if (SendToSerwer == SOCKET_ERROR)
     {
-        Sleep(10);   //trzeba delay, bo inaczej program dostaje zawa³u (pewnie przez sieæ)
-        if (Accept_Game == true)  //jak gracz zaakceptuje to go dodaj
-        {
-            std::cout << Accept_Game << std::endl;
-            sendbuf[0] = 'A';
-            //wyslij wiadomosc o akceptacji gry i break;
-            SendToSerwer = send(ConnectSocket, sendbuf, 1, 0);
-            if (SendToSerwer == SOCKET_ERROR)
-            {
-                printf("send accept failed: %d\n", WSAGetLastError());
-                closesocket(ConnectSocket);
-                WSACleanup();
-                exit(1);
-            }
-            break;
-        }
+        printf("send accept failed: %d\n", WSAGetLastError());
+        closesocket(ConnectSocket);
+        WSACleanup();
+        exit(1);
+    }
 
-    } while (true);
-
-    do
-    {
-        std::cout << "Waiting" << std::endl;
-        if (Answerbuf[0] == '2')    //czekaj w tej pêtli dopóki serwer nie wyœle sygna³u, ¿e mo¿na graæ
-        {
-            std::cout << "Break" << std::endl;
-            GameStarted = true;
-            break;
-        }
-
-    } while (true);
-
-    Sleep(1000);    //musi to byæ, bo inaczej siê program zawiesza
-    DoTextures = true;
+    waitSEM.wait(lck, [] { wait2SEM.notify_one(); return Answerbuf[0] == '2'; });     //uspij watek do momentu az przyjdzieAnswerbuf[0] == '2' wait2SEM zapobiega przedwczesnamu czyszczeniu Answerbuf
+    GameStarted = true;
+    //std::cout << "Break" << std::endl;
 
     do
     {
@@ -428,26 +412,26 @@ void Game(SOCKET ConnectSocket)  //czêœæ kodu odpowiadaj¹ca za komunikacjê serwe
             Sleep(10);   //trzeba delay, bo inaczej program wywala
             if (enter_word == true)  //jesli naklikniemy enter to podajemy slowo do wyslania
             {
-                str = sendbuf;   //trzeba zamieniæ na string, bo string ma kilka fajnych funkcji, które siê tu przydadz¹
+                str = sendbuf;   //trzeba zamieniÄ‡ na string, bo string ma kilka fajnych funkcji, ktÃ³re siÄ™ tu przydadzÄ…
                 //std::cout << enter_word << std::endl;
                 enter_word = false;
                 if (str.length() > 35)
                 {
-                    std::cout << "Maksymalna d³ugoœæ s³owa wynosi 35! Spróbuj ponownie" << std::endl;   //ograniczenie
+                    std::cout << "Maksymalna dÅ‚ugoÅ›Ä‡ sÅ‚owa wynosi 35! SprÃ³buj ponownie" << std::endl;   //ograniczenie
                 }
                 else
                 {
-                    break;   //jak nie ma zastrze¿eñ (s³owo nie jest za d³ugie) to idziemy dalej
+                    break;   //jak nie ma zastrzeÅ¼eÅ„ (sÅ‚owo nie jest za dÅ‚ugie) to idziemy dalej
                 }
             }
         } while (true);
 
-        time_limit = 30;    //gracz wpisal slowo i klina³ enter, co spowoduje wys³anie s³owa/litery, a wiêc mo¿na zresetowaæ czas
+        time_limit = 30;  //gracz wpisal slowo i kliknal enter, wiec mozna juz zresetowac licznik
 
         if (wyniki[0][2] > 0)
         {
             // Send an initial buffer
-            SendToSerwer = send(ConnectSocket, sendbuf, str.length(), 0);   //wysy³anie
+            SendToSerwer = send(ConnectSocket, sendbuf, str.length(), 0);   //wysyÅ‚anie
             if (SendToSerwer == SOCKET_ERROR) {
                 printf("send failed with error: %d\n", WSAGetLastError());
                 closesocket(ConnectSocket);
@@ -482,14 +466,12 @@ void Game(SOCKET ConnectSocket)  //czêœæ kodu odpowiadaj¹ca za komunikacjê serwe
             break;
         }
 
-        Sleep(1000);   //w sumie nie wiem po co to - niech nieco spowalnia prêdkoœæ - najwy¿ej potem usuñ
-
-    } while (true);  //wieczna pêtla
+    } while (true);  //wieczna pÄ™tla
 }
 
 int main()
 {
-    GLFWwindow* window;   //utwórz okno
+    GLFWwindow* window;   //utwÃ³rz okno
 
     if (!glfwInit()) { //initiate GLFW
         fprintf(stderr, "Can't run GLFW.\n");
@@ -503,7 +485,7 @@ int main()
     glfwMakeContextCurrent(window);
 
     if (glewInit() != GLEW_OK) { //initiate GLEW
-        fprintf(stderr, "Nie mo¿na zainicjowaæ GLEW.\n");
+        fprintf(stderr, "Nie moÅ¼na zainicjowaÄ‡ GLEW.\n");
         exit(EXIT_FAILURE);
     }
 
@@ -515,9 +497,9 @@ int main()
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 330");
 
-    setlocale(LC_CTYPE, "Polish"); // polskie znaki (i tak tego nie mo¿na wysy³aæ) lol
+    setlocale(LC_CTYPE, "Polish"); // polskie znaki (i tak tego nie moÅ¼na wysyÅ‚aÄ‡) lol
 
-    WSADATA wsaData;                  //zmienne (zrób z nimi porz¹dek jeszcze)
+    WSADATA wsaData;                  //zmienne (zrÃ³b z nimi porzÄ…dek jeszcze)
     SOCKET ConnectSocket = INVALID_SOCKET;
     struct addrinfo* result = NULL,
         * ptr = NULL,
@@ -576,12 +558,12 @@ int main()
         return 1;
     }
 
-    std::thread(Game, ConnectSocket).detach();  //w¹tek osobno dla komunikacji serwer - klient, osobno dla interfejsu
-    std::thread(SerwerMess, ConnectSocket).detach();  //w¹ted poœwiêcony dla odbierania komunikatów od serwera, aby nie by³o sytuacji, gdzie jakiœ komunikat nie dotrze, bo w¹tek czeka
-    //na funckji, która wysy³a, a ta czeka na gracza, by coœ wpisa³
-    std::thread(timeout, ConnectSocket).detach();//funkcja, ktora kontroluje czy przypadkiem gracz nie jest afk (timeout). Jest to w osobnym w¹tku, poniewa¿ timeout dzia³a niezale¿nie od pozosta³ych dwóch w¹tków
+    std::thread(Game, ConnectSocket).detach();  //wÄ…tek osobno dla komunikacji serwer - klient, osobno dla interfejsu
+    std::thread(SerwerMess, ConnectSocket).detach();  //wÄ…ted poÅ›wiÄ™cony dla odbierania komunikatÃ³w od serwera, aby nie byÅ‚o sytuacji, gdzie jakiÅ› komunikat nie dotrze, bo wÄ…tek czeka
+    //na funckji, ktÃ³ra wysyÅ‚a, a ta czeka na gracza, by coÅ› wpisaÅ‚
+    std::thread(timeout, ConnectSocket).detach(); //funkcja, ktora kontroluje czy przypadkiem gracz nie jest afk (timeout). Jest to w osobnym wÄ…tku, poniewaÅ¼ timeout dziala niezaleznie od pozostaÅ‚ych dwÃ³ch wÄ…tkÃ³w
 
-    do   //wieczna pêtla interface
+    do   //wieczna pÄ™tla interface
     {
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);  //malowanko
@@ -595,7 +577,8 @@ int main()
         {
             // Tworzenie przycisku ImGui
             if (ImGui::Button("Przycisk")) {
-                Accept_Game = true; // Zmiana wartoœci zmiennej bool po naciœniêciu przycisku
+                Accept_Game = true; // Zmiana wartoÅ›ci zmiennej bool po naciÅ›niÄ™ciu przycisku
+                acceptSEM.notify_one();
             }
             //std::cout << Accept_Game << std::endl;
         }
@@ -642,9 +625,9 @@ int main()
             ImGui::Text(Guessing);
             ImGui::End();
 
-            glDeleteTextures(1, &texture);   //usun texture, bo komputer zawa³u dostanie
+            glDeleteTextures(1, &texture);   //usun texture, bo komputer zawaÅ‚u dostanie
 
-            //dodaj jeszcze przycisk "wyniki". Bêdzie on ikrementowa³ id i pokazywal te wyniki, ktore id mamy wskazane. Jak bedzie nie moje id to pisz "gracz o ID X" a jak moje to "Twoje wyniki"
+            //dodaj jeszcze przycisk "wyniki". BÄ™dzie on ikrementowaÅ‚ id i pokazywal te wyniki, ktore id mamy wskazane. Jak bedzie nie moje id to pisz "gracz o ID X" a jak moje to "Twoje wyniki"
             if (ImGui::Button("NEXT")) {
                 if (ShowingID + 1 == LiczbaGraczy)
                 {
@@ -656,7 +639,7 @@ int main()
                 }
             }
 
-            if (DoTextures)
+            if (CzyMaszWyniki)
             {
                 ustawienieTextury();
                 ShowWyniki(); //tutaj pokaz wyniki

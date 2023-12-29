@@ -175,7 +175,7 @@ void gra(SOCKET ClientSocket, int id)
     
     if (IsGameStarted == 1)
     {
-        //usuwanie delikwenta z listy
+        //ustawianie jako obserwer
         CanPlay = false;
         std::cout << "obserwer" << std::endl;
     }

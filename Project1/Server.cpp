@@ -30,7 +30,7 @@ int** wyniki = nullptr;
 
 bool IsGameStarted = false;
 
-SOCKET* KLIENCI = new SOCKET[liczba_klientow];  //dynamiczna tablica dla socket klientów
+SOCKET* KLIENCI = new SOCKET[liczba_klientow];  //tablica dla socket klientów
 
 #define DEFAULT_BUFLEN 36
 #define DEFAULT_PORT "27015"
@@ -292,6 +292,8 @@ void gra(SOCKET ClientSocket, int id)
         Powiadom(id, 3);
     }
 
+    bool pierwsze_wyslanie = true;   //pierwszy raz wysylamy tylko do tego jednego konkretnego w¹tku, a potem bêdzie rozsy³anie do wszystkich
+
     do    //petla gracza
     {
         int dl = visualization_slowo.length();    //wyslij stan odgadnietego slowa do serwera
@@ -305,15 +307,29 @@ void gra(SOCKET ClientSocket, int id)
             }
         }
 
-        for (int i = 0; i < liczba_klientow; i++)   //wysylamy do kazdego
+        if (pierwsze_wyslanie == false)    //wysylanie po raz pierwszy
         {
-            //std::cout << sendbuf << std::endl;
-            int SendToClient = send(KLIENCI[i], sendbuf, visualization_slowo.length(), 0);
+            int SendToClient = send(ClientSocket, sendbuf, visualization_slowo.length(), 0);
             if (SendToClient == SOCKET_ERROR) {
                 DisqualificationWyniki(id);
                 Powiadom(id, 3);
                 BreakConnection(ClientSocket);
                 return;
+            }
+            pierwsze_wyslanie = true;
+        }
+        else      //ka¿de inne potem wyslanie
+        {
+            for (int i = 0; i < liczba_klientow; i++)   //wysylamy do kazdego
+            {
+                //std::cout << sendbuf << std::endl;
+                int SendToClient = send(KLIENCI[i], sendbuf, visualization_slowo.length(), 0);
+                if (SendToClient == SOCKET_ERROR) {
+                    DisqualificationWyniki(id);
+                    Powiadom(id, 3);
+                    BreakConnection(KLIENCI[i]);
+                    return;
+                }
             }
         }
 
